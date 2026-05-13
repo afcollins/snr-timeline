@@ -404,6 +404,7 @@ def parse_logs(files: list, node_names: set) -> dict:
 
     # Dedup consecutive events with same description prefix
     for node_name in events_by_node:
+        events_by_node[node_name].sort(key=lambda e: e.timestamp)
         events_by_node[node_name] = _dedup_events(events_by_node[node_name])
 
     return events_by_node
@@ -620,7 +621,7 @@ def format_node_report(
     lines.append("| Time (UTC) | Source | Event |")
     lines.append("|---|---|---|")
     for event in timeline:
-        ts_str = event.timestamp.strftime("%H:%M:%S")
+        ts_str = event.timestamp.strftime("%H:%M:%S.%f")[:-3]
         lines.append(f"| {ts_str} | {event.source} | {event.description} |")
     lines.append("")
     lines.append("---")

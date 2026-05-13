@@ -560,6 +560,7 @@ class TestFormatNodeReport:
         assert "Notable Observations" in report
         assert "Pre-Reboot-Completed" in report
         assert "5m00s" in report
+        assert "19:09:46.000" in report
 
 
 # --- Integration: run() ---
