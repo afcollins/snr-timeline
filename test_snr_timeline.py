@@ -540,6 +540,52 @@ class TestExtractExtraInfo:
 # --- format_node_report ---
 
 class TestFormatNodeReport:
+    def test_state_table_collapses_runs(self):
+        rows = [
+            {"time": "17:18:23", "phase": "Pre-Reboot-Completed",
+             "processing": "True", "succeeded": "Unknown", "reason": "RemediationStarted"},
+            {"time": "17:18:32", "phase": "Pre-Reboot-Completed",
+             "processing": "True", "succeeded": "Unknown", "reason": "RemediationStarted"},
+            {"time": "17:18:41", "phase": "Pre-Reboot-Completed",
+             "processing": "True", "succeeded": "Unknown", "reason": "RemediationStarted"},
+            {"time": "17:21:49", "phase": "Reboot-Completed",
+             "processing": "True", "succeeded": "Unknown", "reason": "RemediationStarted"},
+            {"time": "17:22:08", "phase": "Fencing-Completed",
+             "processing": "False", "succeeded": "True", "reason": "RemediationFinishedSuccessfully"},
+            {"time": "17:23:33", "phase": "Fencing-Completed",
+             "processing": "False", "succeeded": "True", "reason": "RemediationFinishedSuccessfully"},
+        ]
+        report = format_node_report(
+            node_name="node-a", snr_name="node-a-abc12",
+            strategy="OutOfServiceTaint", template_name="t",
+            state_table=rows, timeline=[], durations=[], notable=[],
+        )
+        # Run of 3 Pre-Reboot: first, *(1 more)*, last
+        assert "17:18:23" in report
+        assert "*(1 more)*" in report
+        assert "17:18:41" in report
+        # Reboot run of 1: shown as-is
+        assert "17:21:49" in report
+        # Fencing run of 2: both shown, no ellipsis
+        assert "17:22:08" in report
+        assert "17:23:33" in report
+        assert "*(0 more)*" not in report
+
+    def test_state_table_run_of_two_no_ellipsis(self):
+        rows = [
+            {"time": "17:22:08", "phase": "Fencing-Completed",
+             "processing": "False", "succeeded": "True", "reason": "RemediationFinishedSuccessfully"},
+            {"time": "17:23:33", "phase": "Fencing-Completed",
+             "processing": "False", "succeeded": "True", "reason": "RemediationFinishedSuccessfully"},
+        ]
+        report = format_node_report(
+            node_name="node-a", snr_name="", strategy="", template_name="",
+            state_table=rows, timeline=[], durations=[], notable=[],
+        )
+        assert "17:22:08" in report
+        assert "17:23:33" in report
+        assert "more" not in report
+
     def test_contains_sections(self):
         report = format_node_report(
             node_name="node-a",

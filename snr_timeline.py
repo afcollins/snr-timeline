@@ -607,13 +607,34 @@ def format_node_report(
     lines.append("---")
     lines.append("")
 
-    # SNR State Table
+    # SNR State Table — collapse consecutive identical-state runs
     lines.append("## SNR Object State Over Time (from yaml snapshots)")
     lines.append("")
     lines.append("| Snapshot Time | Phase | Processing | Succeeded | Reason |")
     lines.append("|---|---|---|---|---|")
+
+    def _row_key(r):
+        return (r['phase'], r['processing'], r['succeeded'], r['reason'])
+
+    def _fmt_row(r):
+        return f"| {r['time']} | {r['phase']} | {r['processing']} | {r['succeeded']} | {r['reason']} |"
+
+    # Group into runs of identical state
+    runs = []
     for row in state_table:
-        lines.append(f"| {row['time']} | {row['phase']} | {row['processing']} | {row['succeeded']} | {row['reason']} |")
+        if runs and _row_key(row) == _row_key(runs[-1][-1]):
+            runs[-1].append(row)
+        else:
+            runs.append([row])
+
+    for run in runs:
+        if len(run) <= 2:
+            for row in run:
+                lines.append(_fmt_row(row))
+        else:
+            lines.append(_fmt_row(run[0]))
+            lines.append(f"| *({len(run) - 2} more)* | | | | |")
+            lines.append(_fmt_row(run[-1]))
     lines.append("")
     lines.append("---")
     lines.append("")
