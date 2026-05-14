@@ -105,6 +105,96 @@ metadata:
   resourceVersion: ""
 """
 
+# Two nodes active simultaneously, node-b finishes first
+SAMPLE_SNR_TWO_NODES_YAML = """\
+apiVersion: v1
+items:
+- apiVersion: self-node-remediation.medik8s.io/v1alpha1
+  kind: SelfNodeRemediation
+  metadata:
+    annotations:
+      remediation.medik8s.io/node-name: node-a
+      remediation.medik8s.io/template-name: self-node-remediation-outofservicetaint-strategy-template
+    creationTimestamp: "2026-05-12T19:09:46Z"
+    name: node-a-abc12
+    namespace: openshift-workload-availability
+  spec:
+    remediationStrategy: OutOfServiceTaint
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-12T19:09:47Z"
+      message: ""
+      reason: RemediationStarted
+      status: "True"
+      type: Processing
+    - lastTransitionTime: "2026-05-12T19:09:47Z"
+      message: ""
+      reason: RemediationStarted
+      status: Unknown
+      type: Succeeded
+    phase: Pre-Reboot-Completed
+- apiVersion: self-node-remediation.medik8s.io/v1alpha1
+  kind: SelfNodeRemediation
+  metadata:
+    annotations:
+      remediation.medik8s.io/node-name: node-b
+      remediation.medik8s.io/template-name: self-node-remediation-outofservicetaint-strategy-template
+    creationTimestamp: "2026-05-12T19:09:46Z"
+    name: node-b-xyz99
+    namespace: openshift-workload-availability
+  spec:
+    remediationStrategy: OutOfServiceTaint
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-12T19:09:47Z"
+      message: ""
+      reason: RemediationStarted
+      status: "True"
+      type: Processing
+    - lastTransitionTime: "2026-05-12T19:09:47Z"
+      message: ""
+      reason: RemediationStarted
+      status: Unknown
+      type: Succeeded
+    phase: Pre-Reboot-Completed
+kind: List
+metadata:
+  resourceVersion: ""
+"""
+
+# node-b done, node-a still remediating
+SAMPLE_SNR_ONE_NODE_YAML = """\
+apiVersion: v1
+items:
+- apiVersion: self-node-remediation.medik8s.io/v1alpha1
+  kind: SelfNodeRemediation
+  metadata:
+    annotations:
+      remediation.medik8s.io/node-name: node-a
+      remediation.medik8s.io/template-name: self-node-remediation-outofservicetaint-strategy-template
+    creationTimestamp: "2026-05-12T19:09:46Z"
+    name: node-a-abc12
+    namespace: openshift-workload-availability
+  spec:
+    remediationStrategy: OutOfServiceTaint
+  status:
+    conditions:
+    - lastTransitionTime: "2026-05-12T19:13:24Z"
+      message: ""
+      reason: RemediationFinishedSuccessfully
+      status: "False"
+      type: Processing
+    - lastTransitionTime: "2026-05-12T19:13:24Z"
+      message: ""
+      reason: RemediationFinishedSuccessfully
+      status: "True"
+      type: Succeeded
+    phase: Fencing-Completed
+kind: List
+metadata:
+  resourceVersion: ""
+"""
+
 SAMPLE_NHC_LOG = """\
 2026-05-12T18:59:44.924561750Z	INFO	controllers.NodeHealthCheck	handling healthy node	{"NodeHealthCheck name": "nhc-worker-self", "node": "node-a"}
 2026-05-12T19:08:36.894191373Z	INFO	controllers.NodeHealthCheck	Node is going to match unhealthy condition	{"node": "node-a", "condition type": "Ready", "condition status": "Unknown", "duration left": "59.098s"}
@@ -608,6 +698,85 @@ class TestFormatNodeReport:
         assert "Pre-Reboot-Completed" in report
         assert "5m00s" in report
         assert "19:09:46.000" in report
+
+
+# --- discover_nodes_from_logs ---
+
+class TestDiscoverNodesFromLogs:
+    def test_finds_nodes(self, tmp_path):
+        log = tmp_path / "logs.nhc.log"
+        log.write_text(
+            '2026-05-12T19:08:36Z\tINFO\tctrl\thandling healthy node\t{"node": "node-a"}\n'
+            '2026-05-12T19:08:37Z\tINFO\tctrl\thandling healthy node\t{"node": "node-b"}\n'
+        )
+        from snr_timeline import discover_nodes_from_logs
+        nodes = discover_nodes_from_logs([str(log)])
+        assert "node-a" in nodes
+        assert "node-b" in nodes
+
+    def test_empty_log(self, tmp_path):
+        log = tmp_path / "logs.nhc.log"
+        log.write_text("no node fields here\n")
+        from snr_timeline import discover_nodes_from_logs
+        assert discover_nodes_from_logs([str(log)]) == set()
+
+
+# --- Multi-node yaml parsing ---
+
+class TestMultiNodeParsing:
+    def test_two_nodes_discovered(self, tmp_path):
+        (tmp_path / "oc_g_snr.2026-05-12-191215.yaml").write_text(SAMPLE_SNR_TWO_NODES_YAML)
+        files = discover_files(str(tmp_path))
+        snapshots = parse_snr_yamls(files["snr_yamls"])
+        assert "node-a" in snapshots
+        assert "node-b" in snapshots
+
+    def test_node_b_marked_deleted_independently(self, tmp_path):
+        # First snapshot: both nodes active
+        (tmp_path / "oc_g_snr.2026-05-12-191215.yaml").write_text(SAMPLE_SNR_TWO_NODES_YAML)
+        # Second snapshot: only node-a (node-b finished)
+        (tmp_path / "oc_g_snr.2026-05-12-191326.yaml").write_text(SAMPLE_SNR_ONE_NODE_YAML)
+        files = discover_files(str(tmp_path))
+        snapshots = parse_snr_yamls(files["snr_yamls"])
+        # node-a should NOT be marked deleted
+        node_a_phases = [s.phase for s in snapshots["node-a"]]
+        assert "(SNR deleted — items list empty)" not in node_a_phases
+        # node-b should be marked deleted
+        node_b_phases = [s.phase for s in snapshots["node-b"]]
+        assert "(SNR deleted — items list empty)" in node_b_phases
+
+    def test_multi_node_run_produces_both_reports(self, tmp_path):
+        (tmp_path / "oc_g_snr.2026-05-12-191215.yaml").write_text(SAMPLE_SNR_TWO_NODES_YAML)
+        output = run(str(tmp_path))
+        assert "node-a" in output
+        assert "node-b" in output
+
+
+# --- Logs-only mode ---
+
+class TestLogsOnlyMode:
+    def test_no_yamls_falls_back_to_logs(self, tmp_path):
+        (tmp_path / "logs.node-healthcheck-controller-manager-abc.log").write_text(SAMPLE_NHC_LOG)
+        (tmp_path / "logs.self-node-remediation-controller-manager-xyz.log").write_text(SAMPLE_SNR_LOG)
+        output = run(str(tmp_path))
+        assert "node-a" in output
+        assert "Correlated Timeline" in output
+
+    def test_no_yaml_snapshots_notice_shown(self, tmp_path):
+        (tmp_path / "logs.node-healthcheck-controller-manager-abc.log").write_text(SAMPLE_NHC_LOG)
+        output = run(str(tmp_path))
+        assert "logs only" in output.lower()
+
+    def test_no_files_at_all(self, tmp_path):
+        output = run(str(tmp_path))
+        assert "No SNR yaml" in output or "No node names" in output or "log files" in output
+
+    def test_logs_only_still_computes_durations(self, tmp_path):
+        (tmp_path / "logs.node-healthcheck-controller-manager-abc.log").write_text(SAMPLE_NHC_LOG)
+        (tmp_path / "logs.self-node-remediation-controller-manager-xyz.log").write_text(SAMPLE_SNR_LOG)
+        output = run(str(tmp_path))
+        assert "Key Durations" in output
+        assert "Total remediation" in output
 
 
 # --- Integration: run() ---

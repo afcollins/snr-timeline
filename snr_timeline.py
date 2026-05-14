@@ -247,21 +247,24 @@ def parse_snr_yamls(files: list) -> dict:
 
         if doc.get('kind') == 'List':
             items = doc.get('items', [])
-            if not items:
-                # Empty list — record as deleted
-                for node_name in snapshots_by_node:
-                    snapshots_by_node[node_name].append(SNRSnapshot(
-                        observation_time=obs_time_fmt,
-                        node_name=node_name,
-                        snr_name="",
-                        phase="(SNR deleted — items list empty)",
-                        observation_time_iso=obs_time_iso,
-                    ))
-                continue
+            active_nodes = set()
             for item in items:
                 snap = _extract_snapshot(item, obs_time_fmt, obs_time_iso)
                 if snap:
                     snapshots_by_node.setdefault(snap.node_name, []).append(snap)
+                    active_nodes.add(snap.node_name)
+            # Mark deleted only nodes that were previously seen but absent this snapshot
+            for node_name in snapshots_by_node:
+                if node_name not in active_nodes:
+                    last = snapshots_by_node[node_name][-1]
+                    if last.phase != "(SNR deleted — items list empty)":
+                        snapshots_by_node[node_name].append(SNRSnapshot(
+                            observation_time=obs_time_fmt,
+                            node_name=node_name,
+                            snr_name="",
+                            phase="(SNR deleted — items list empty)",
+                            observation_time_iso=obs_time_iso,
+                        ))
         else:
             snap = _extract_snapshot(doc, obs_time_fmt, obs_time_iso)
             if snap:
@@ -607,34 +610,37 @@ def format_node_report(
     lines.append("---")
     lines.append("")
 
-    # SNR State Table — collapse consecutive identical-state runs
-    lines.append("## SNR Object State Over Time (from yaml snapshots)")
-    lines.append("")
-    lines.append("| Snapshot Time | Phase | Processing | Succeeded | Reason |")
-    lines.append("|---|---|---|---|---|")
-
     def _row_key(r):
         return (r['phase'], r['processing'], r['succeeded'], r['reason'])
 
     def _fmt_row(r):
         return f"| {r['time']} | {r['phase']} | {r['processing']} | {r['succeeded']} | {r['reason']} |"
 
-    # Group into runs of identical state
-    runs = []
-    for row in state_table:
-        if runs and _row_key(row) == _row_key(runs[-1][-1]):
-            runs[-1].append(row)
-        else:
-            runs.append([row])
+    if not state_table:
+        lines.append("*No yaml snapshots — timeline from logs only.*")
+    else:
+        # SNR State Table — collapse consecutive identical-state runs
+        lines.append("## SNR Object State Over Time (from yaml snapshots)")
+        lines.append("")
+        lines.append("| Snapshot Time | Phase | Processing | Succeeded | Reason |")
+        lines.append("|---|---|---|---|---|")
 
-    for run in runs:
-        if len(run) <= 2:
-            for row in run:
-                lines.append(_fmt_row(row))
-        else:
-            lines.append(_fmt_row(run[0]))
-            lines.append(f"| *({len(run) - 2} more)* | | | | |")
-            lines.append(_fmt_row(run[-1]))
+        runs = []
+        for row in state_table:
+            if runs and _row_key(row) == _row_key(runs[-1][-1]):
+                runs[-1].append(row)
+            else:
+                runs.append([row])
+
+        for run in runs:
+            if len(run) <= 2:
+                for row in run:
+                    lines.append(_fmt_row(row))
+            else:
+                lines.append(_fmt_row(run[0]))
+                lines.append(f"| *({len(run) - 2} more)* | | | | |")
+                lines.append(_fmt_row(run[-1]))
+
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -676,6 +682,18 @@ def format_node_report(
     return "\n".join(lines)
 
 
+def discover_nodes_from_logs(files: list) -> set:
+    """Scan log files for node names via 'node': '...' JSON field."""
+    node_names = set()
+    pattern = re.compile(r'"node":\s*"([^"]+)"')
+    for filepath in files:
+        with open(filepath, 'r') as f:
+            for line in f:
+                for m in pattern.finditer(line):
+                    node_names.add(m.group(1))
+    return node_names
+
+
 def format_summary(node_reports: dict) -> str:
     """Multi-node summary header."""
     if len(node_reports) <= 1:
@@ -698,15 +716,17 @@ def run(directory: str, node_filter: Optional[str] = None) -> str:
     """Main processing pipeline. Returns markdown string."""
     files = discover_files(directory)
 
-    if not files["snr_yamls"]:
-        return "No SNR yaml files found in directory."
-
-    # Parse yamls first to discover node names
-    snapshots_by_node = parse_snr_yamls(files["snr_yamls"])
+    # Parse yamls to discover node names (may be empty)
+    snapshots_by_node = parse_snr_yamls(files["snr_yamls"]) if files["snr_yamls"] else {}
     node_names = set(snapshots_by_node.keys())
 
+    # Fall back to log discovery if no yaml snapshots
     if not node_names:
-        return "No SNR objects found in yaml files."
+        if not files["log_files"]:
+            return "No SNR yaml files or log files found in directory."
+        node_names = discover_nodes_from_logs(files["log_files"])
+        if not node_names:
+            return "No node names found in logs or yaml files."
 
     # Filter nodes if requested
     if node_filter:
