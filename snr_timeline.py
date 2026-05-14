@@ -760,6 +760,13 @@ def run(directory: str, node_filter: Optional[str] = None) -> str:
         state_table = build_snr_state_table(snapshots)
         yaml_events = yaml_events_from_snapshots(snapshots)
         timeline = merge_timeline(log_events, yaml_events)
+
+        # Skip nodes with no remediation activity
+        if not snapshots and all(
+            e.description.startswith("Node healthy") for e in timeline
+        ):
+            continue
+
         durations = compute_durations(timeline)
         notable = detect_notable(timeline)
 

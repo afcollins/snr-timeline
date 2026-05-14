@@ -771,6 +771,19 @@ class TestLogsOnlyMode:
         output = run(str(tmp_path))
         assert "No SNR yaml" in output or "No node names" in output or "log files" in output
 
+    def test_healthy_only_nodes_suppressed(self, tmp_path):
+        healthy_log = (
+            '2026-05-12T19:00:00.000Z\tINFO\tcontrollers.NodeHealthCheck\t'
+            'handling healthy node\t{"NodeHealthCheck name": "nhc", "node": "node-healthy"}\n'
+        )
+        (tmp_path / "logs.node-healthcheck-controller-manager-abc.log").write_text(
+            SAMPLE_NHC_LOG + healthy_log
+        )
+        (tmp_path / "logs.self-node-remediation-controller-manager-xyz.log").write_text(SAMPLE_SNR_LOG)
+        output = run(str(tmp_path))
+        assert "node-a" in output
+        assert "node-healthy" not in output
+
     def test_logs_only_still_computes_durations(self, tmp_path):
         (tmp_path / "logs.node-healthcheck-controller-manager-abc.log").write_text(SAMPLE_NHC_LOG)
         (tmp_path / "logs.self-node-remediation-controller-manager-xyz.log").write_text(SAMPLE_SNR_LOG)
