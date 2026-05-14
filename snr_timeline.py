@@ -35,6 +35,7 @@ class SNRSnapshot:
     conditions: list = field(default_factory=list)
     strategy: str = ""
     template_name: str = ""
+    observation_time_iso: str = ""
 
 
 @dataclass
@@ -229,7 +230,9 @@ def parse_snr_yamls(files: list) -> dict:
         # Extract observation time from filename
         time_match = re.search(r'(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})(\d{2})', filename)
         if time_match:
+            date_part = time_match.group(1)
             obs_time_fmt = f"{time_match.group(2)}:{time_match.group(3)}:{time_match.group(4)}"
+            obs_time_iso = f"{date_part}T{obs_time_fmt}Z"
         else:
             # No timestamp in filename (e.g. oc_g_snr.f03-h06.yaml) — skip
             # These are standalone captures, not time-series snapshots
@@ -252,21 +255,22 @@ def parse_snr_yamls(files: list) -> dict:
                         node_name=node_name,
                         snr_name="",
                         phase="(SNR deleted — items list empty)",
+                        observation_time_iso=obs_time_iso,
                     ))
                 continue
             for item in items:
-                snap = _extract_snapshot(item, obs_time_fmt)
+                snap = _extract_snapshot(item, obs_time_fmt, obs_time_iso)
                 if snap:
                     snapshots_by_node.setdefault(snap.node_name, []).append(snap)
         else:
-            snap = _extract_snapshot(doc, obs_time_fmt)
+            snap = _extract_snapshot(doc, obs_time_fmt, obs_time_iso)
             if snap:
                 snapshots_by_node.setdefault(snap.node_name, []).append(snap)
 
     return snapshots_by_node
 
 
-def _extract_snapshot(item: dict, obs_time: str) -> Optional[SNRSnapshot]:
+def _extract_snapshot(item: dict, obs_time: str, obs_time_iso: str = "") -> Optional[SNRSnapshot]:
     meta = item.get("metadata", {})
     annotations = meta.get("annotations", {})
     node_name = annotations.get("remediation.medik8s.io/node-name", "")
@@ -288,6 +292,7 @@ def _extract_snapshot(item: dict, obs_time: str) -> Optional[SNRSnapshot]:
         conditions=conditions,
         strategy=strategy,
         template_name=template_name,
+        observation_time_iso=obs_time_iso,
     )
 
 
@@ -468,10 +473,8 @@ def yaml_events_from_snapshots(snapshots: list) -> list:
                 if ltt:
                     ts = parse_timestamp(ltt)
                     break
-            if not ts and len(snap.observation_time) == 8:
-                # observation_time is HH:MM:SS — build a minimal parseable timestamp
-                # Use date from first condition of first snapshot if available
-                ts = parse_timestamp(f"2026-01-01T{snap.observation_time}Z")
+            if not ts and snap.observation_time_iso:
+                ts = parse_timestamp(snap.observation_time_iso)
 
             if ts:
                 events.append(Event(

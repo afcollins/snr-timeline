@@ -405,7 +405,8 @@ class TestYamlEvents:
 
     def test_deleted_event(self):
         snapshots = [
-            SNRSnapshot("19:14:57", "node-a", "", "(SNR deleted — items list empty)", []),
+            SNRSnapshot("19:14:57", "node-a", "", "(SNR deleted — items list empty)", [],
+                        observation_time_iso="2026-05-12T19:14:57Z"),
         ]
         events = yaml_events_from_snapshots(snapshots)
         assert len(events) == 1
